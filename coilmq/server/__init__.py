@@ -5,6 +5,7 @@ CoilMQ is designed for the Python StompServer reference socket server (specifica
 multi-threaded); however, some alternative implementation examples are also provided. 
 """
 import abc
+import typing as t
 
 __authors__ = ['"Hans Lellelid" <hans@xmpl.org>']
 __license__ = """Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +19,8 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License."""
+
+from coilmq.util.frames import Frame
 
 
 class StompConnection(object):
@@ -41,4 +44,30 @@ class StompConnection(object):
 
         @param frame: The STOMP frame to send.
         @type frame: C{stompclient.frame.Frame}  
+        """
+
+
+class AsyncStompConnection:
+    """
+    An "interface" for server implementation classes to "implement".
+
+    This class serves primarily as a means to document the API that CoilMQ will expect
+    the connection object to implement.
+
+    @param: reliable_subscriber: Whether this client will ACK all messages.
+    """
+    __metaclass__ = abc.ABCMeta
+
+    reliable_subscriber = False
+
+    @abc.abstractmethod
+    async def receive_frame(self) -> Frame:
+        """
+        Uses this connection implementation to asynchronously receive a frame from the connected client.
+        """
+
+    @abc.abstractmethod
+    async def send_frame(self, frame: Frame):
+        """
+        Uses this connection implementation to asynchronously send the specified frame to a connected client.
         """

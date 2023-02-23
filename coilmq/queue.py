@@ -9,8 +9,11 @@ import threading
 import uuid
 from collections import defaultdict
 
-from coilmq.scheduler import FavorReliableSubscriberScheduler, RandomQueueScheduler
-from coilmq.subscription import SubscriptionManager, Subscription
+from coilmq.scheduler import FavorReliableSubscriberScheduler, RandomQueueScheduler, SubscriberPriorityScheduler, \
+    QueuePriorityScheduler
+from coilmq.server import AsyncStompConnection
+from coilmq.store import QueueStore
+from coilmq.subscription import SubscriptionManager, Subscription, AsyncSubscriptionManager, AsyncSubscription
 from coilmq.util.concurrency import synchronized
 
 __authors__ = ['"Hans Lellelid" <hans@xmpl.org>']
@@ -26,6 +29,8 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License."""
+
+from coilmq.util.frames import Frame
 
 lock = threading.RLock()
 
@@ -369,3 +374,285 @@ class QueueManager(object):
             self._pending[subscription] = frame
 
         subscription.connection.send_frame(frame)
+
+
+class AsyncQueueManager(object):
+    """
+    Class that manages distribution of messages to queue subscribers.
+
+    @ivar _transaction_frames: Frames that have been ACK'd within a transaction.
+    @type _transaction_frames: C{dict} of L{coilmq.subscription.Subscription} to C{dict} of C{str} to C{stompclient.frame.Frame}
+    """
+
+    def __init__(
+        self,
+        store: QueueStore,
+        subscriber_scheduler: SubscriberPriorityScheduler | None = None,
+        queue_scheduler: QueuePriorityScheduler | None = None,
+    ):
+        self.log = logging.getLogger(
+            '%s.%s' % (__name__, self.__class__.__name__))
+
+        # Use default schedulers, if they're not specified
+        if subscriber_scheduler is None:
+            subscriber_scheduler = FavorReliableSubscriberScheduler()
+
+        if queue_scheduler is None:
+            queue_scheduler = RandomQueueScheduler()
+
+        # This lock var is required by L{synchronized} decorator.
+        self._lock = threading.RLock()
+
+        self.store = store
+        self.subscriber_scheduler = subscriber_scheduler
+        self.queue_scheduler = queue_scheduler
+
+        self._subscriptions = AsyncSubscriptionManager()
+        self._transaction_frames: dict[AsyncSubscription, dict[str, list[Frame]]] \
+            = defaultdict(lambda: defaultdict(list))
+        self._pending: dict[AsyncSubscription, Frame] = {}
+
+    @synchronized(lock)
+    def close(self):
+        """
+        Closes all resources/backends associated with this queue manager.
+        """
+        self.log.info("Shutting down queue manager.")
+        if hasattr(self.store, 'close'):
+            self.store.close()
+
+        if hasattr(self.subscriber_scheduler, 'close'):
+            self.subscriber_scheduler.close()
+
+        if hasattr(self.queue_scheduler, 'close'):
+            self.queue_scheduler.close()
+
+    @synchronized(lock)
+    def subscriber_count(self, destination: str | None = None) -> int:
+        """
+        Returns a count of the number of subscribers.
+
+        If destination is specified then it only returns count of subscribers
+        for that specific destination.
+        """
+        return self._subscriptions.subscriber_count(destination=destination)
+
+    @synchronized(lock)
+    def subscribe(
+        self,
+        connection: AsyncStompConnection,
+        destination: str,
+        id: int | str | None = None,
+    ):
+        """
+        Subscribes a connection to the specified destination (topic or queue).
+        """
+        self.log.debug("Subscribing %s to %s" % (connection, destination))
+        subscription = self._subscriptions.subscribe(connection, destination, id=id)
+        self._send_backlog(subscription, destination)
+
+    @synchronized(lock)
+    def unsubscribe(
+        self,
+        connection: AsyncStompConnection,
+        destination: str,
+        id: int | str | None = None,
+    ):
+        """
+        Unsubscribes a connection from a destination (topic or queue).
+        """
+        self.log.debug("Unsubscribing %s from %s" % (connection, destination))
+        self._subscriptions.unsubscribe(connection, destination, id=id)
+
+    @synchronized(lock)
+    def disconnect(self, connection: AsyncStompConnection):
+        """
+        Removes a subscriber connection, ensuring that any pending commands get requeued.
+        """
+        self.log.debug("Disconnecting %s" % connection)
+        for subscription, pending_frame in list(self._pending.items()):
+            if subscription.connection == connection:
+                self.store.requeue(pending_frame.headers.get(
+                    'destination'), pending_frame)
+                del self._pending[subscription]
+        self._subscriptions.disconnect(connection)
+
+    @synchronized(lock)
+    async def send(self, message: Frame):
+        """
+        Sends a MESSAGE frame to an eligible subscriber connection.
+
+        Note that this method will modify the incoming message object to
+        add a message-id header (if not present) and to change the command
+        to 'MESSAGE' (if it is not).
+        """
+        dest = message.headers.get('destination')
+        if not dest:
+            raise ValueError(
+                "Cannot send frame with no destination: %s" % message)
+
+        message.cmd = 'message'
+
+        message.headers.setdefault('message-id', str(uuid.uuid4()))
+
+        # Grab all subscribers for this destination that do not have pending
+        # frames
+        subscribers = [s for s in self._subscriptions.subscribers(dest)
+                       if s not in self._pending]
+
+        if not subscribers:
+            self.log.debug(
+                "No eligible subscribers; adding message %s to queue %s" % (message, dest))
+            self.store.enqueue(dest, message)
+        else:
+            selected = self.subscriber_scheduler.choice(subscribers, message)
+            self.log.debug("Delivering message %s to subscriber %s" %
+                           (message, selected))
+            await self._send_frame(selected, message)
+
+    @synchronized(lock)
+    async def ack(
+        self,
+        connection: AsyncStompConnection,
+        frame: Frame,
+        transaction: str | None = None,
+        id: int | str | None = None,
+    ):
+        """
+        Acknowledge receipt of a message.
+
+        If the `transaction` parameter is non-null, the frame being ack'd
+        will be queued so that it can be requeued if the transaction
+        is rolled back.
+        """
+        self.log.debug("ACK %s for %s" % (frame, connection))
+
+        subscription = AsyncSubscription.factory(connection=connection, id=id)
+        pending_frame = self._pending.get(subscription, None)
+
+        if pending_frame is not None:
+            # Make sure that the frame being acknowledged matches
+            # the expected frame
+            message_id = frame.headers.get('message-id')
+            if pending_frame.headers.get('message-id') != message_id:
+                self.log.warning(
+                    "Got a ACK for unexpected message-id: %s", message_id)
+                self.store.requeue(pending_frame.headers.get('destination'), pending_frame)
+                # (The pending frame will be removed further down)
+
+            if transaction is not None:
+                self._transaction_frames[subscription][
+                    transaction].append(pending_frame)
+
+            self._pending.pop(subscription)
+            await self._send_backlog(subscription)
+        else:
+            self.log.debug("No pending messages for %s" % subscription)
+
+    @synchronized(lock)
+    async def resend_transaction_frames(self, connection, transaction):
+        """
+        Resend the messages that were ACK'd in specified transaction.
+
+        This is called by the engine when there is an abort command.
+
+        @param connection: The client connection that aborted the transaction.
+        @type connection: L{coilmq.server.StompConnection}
+
+        @param transaction: The transaction id (which was aborted).
+        @type transaction: C{str}
+        """
+        for subscription, frames in self._transaction_frames.items():
+            if subscription.connection == connection:
+                for frame in frames[transaction]:
+                    await self.send(frame)
+
+    @synchronized(lock)
+    def clear_transaction_frames(self, connection: AsyncStompConnection, transaction: str):
+        """
+        Clears out the queued ACK frames for specified transaction.
+
+        This is called by the engine when there is a commit command.
+        """
+        for subscription, frames in self._transaction_frames.items():
+            if subscription.connection == connection:
+                try:
+                    del frames[transaction]
+                except KeyError:
+                    # There may not have been any ACK frames for this transaction.
+                    pass
+
+    async def _send_backlog(
+        self,
+        subscription: AsyncSubscription,
+        destination: str | None = None,
+    ):
+        """
+        Sends any queued-up messages for the (optionally) specified destination to subscription.
+
+        If the destination is not provided, a destination is chosen using the
+        L{QueueManager.queue_scheduler} scheduler algorithm.
+
+        (This method assumes it is being called from within a lock-guarded public
+        method.)
+        """
+        if destination is None:
+            # Find all destinations that have frames and that contain this subscription.
+            eligible_subscriptions: dict[str, AsyncSubscription] = dict(
+                (dest, s) for (dest, s) in self._subscriptions.all_subscribers()
+                if subscription in s and self.store.has_frames(dest)
+            )
+            destination = self.queue_scheduler.choice(
+                eligible_subscriptions, subscription)
+            if destination is None:
+                self.log.debug(
+                    "No eligible queues (with frames) for subscriber %s" % subscription)
+                return
+
+        self.log.debug("Sending backlog to %s for destination %s" %
+                       (subscription, destination))
+        if subscription.connection.reliable_subscriber:
+            # only send one message (waiting for ack)
+            frame = self.store.dequeue(destination)
+            if frame:
+                try:
+                    await self._send_frame(subscription, frame)
+                except Exception as x:
+                    self.log.error(
+                        "Error sending message %s (requeueing): %s" % (frame, x))
+                    self.store.requeue(destination, frame)
+                    raise
+        else:
+            for frame in self.store.frames(destination):
+                try:
+                    await self._send_frame(subscription, frame)
+                except Exception as x:
+                    self.log.error(
+                        "Error sending message %s (requeueing): %s" % (frame, x))
+                    self.store.requeue(destination, frame)
+                    raise
+
+    async def _send_frame(self, subscription: AsyncSubscription, frame: Frame):
+        """
+        Sends a frame to a specific subscription.
+
+        (This method assumes it is being called from within a lock-guarded public
+        method.)
+        """
+        assert subscription is not None
+        assert frame is not None
+
+        if frame.cmd == "message":
+            frame.headers["subscription"] = subscription.id
+
+        self.log.debug("Delivering frame %s to subscription %s" %
+                       (frame, subscription))
+
+        if subscription.connection.reliable_subscriber:
+            if subscription in self._pending:
+                raise RuntimeError("Connection already has a pending frame.")
+            self.log.debug(
+                "Tracking frame %s as pending for subscription %s" % (frame, subscription))
+            self._pending[subscription] = frame
+
+        await subscription.connection.send_frame(frame)

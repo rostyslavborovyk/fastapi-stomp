@@ -37,6 +37,9 @@ class BodyNotTerminated(Exception):
 class EmptyBuffer(Exception):
     """The buffer is empty"""
 
+class NoContentLength(Exception):
+    """No content length was specified in the frame"""
+
 
 def parse_headers(buff):
     """
@@ -49,6 +52,60 @@ def parse_headers(buff):
     if not preamble_lines:
         raise EmptyBuffer()
     return preamble_lines[0], OrderedDict([l.split(':') for l in preamble_lines[1:]])
+
+
+def parse_from_text(message: str):
+    """Called to unpack a STOMP message into a dictionary.
+    returned = {
+        # STOMP Command:
+        'cmd' : '...',
+        # Headers e.g.
+        'headers' : {
+            'destination' : 'xyz',
+            'message-id' : 'some event',
+            :
+            etc,
+        }
+        # Body:
+        'body' : '...1234...\x00',
+    }
+    """
+    headers = {}
+    body = []
+
+    breakdown = message.split('\n')
+
+    # Get the message command:
+    cmd = breakdown[0]
+    breakdown = breakdown[1:]
+
+    def headD(field):
+        # find the first ':' everything to the left of this is a
+        # header, everything to the right is data:
+        index = field.find(':')
+        if index:
+            header = field[:index].strip()
+            data = field[index+1:].strip()
+            headers[header.strip()] = data.strip()
+
+    def bodyD(field):
+        field = field.strip()
+        if field:
+            body.append(field)
+
+    # Recover the header fields and body data
+    handler = headD
+    for field in breakdown:
+        if field.strip() == '':
+            # End of headers, if body data next.
+            handler = bodyD
+            continue
+
+        handler(field)
+
+    body = "".join(body)
+    body = body.replace('\x00', '')
+    return cmd, headers, body
 
 
 def parse_body(buff, headers):
@@ -108,6 +165,11 @@ class Frame(object):
     def from_buffer(cls, buff):
         cmd, headers = parse_headers(buff)
         body = parse_body(buff, headers)
+        return cls(cmd, headers=headers, body=body)
+
+    @classmethod
+    def from_text(cls, text: str) -> 'Frame':
+        cmd, headers, body = parse_from_text(text)
         return cls(cmd, headers=headers, body=body)
 
     def pack(self):

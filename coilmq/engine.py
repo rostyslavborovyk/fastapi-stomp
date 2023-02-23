@@ -1,6 +1,10 @@
 from __future__ import absolute_import
 
-from coilmq.protocol import STOMP10
+from coilmq.auth import AsyncAuthenticator
+from coilmq.protocol import STOMP10, AsyncSTOMP10
+from coilmq.queue import AsyncQueueManager
+from coilmq.server import AsyncStompConnection
+from coilmq.topic import AsyncTopicManager
 
 """
 Core STOMP server logic, abstracted from socket transport implementation.
@@ -83,6 +87,51 @@ class StompEngine(object):
 
     def process_frame(self, frame):
         self.protocol.process_frame(frame)
+
+    def unbind(self):
+        """
+        Unbinds this connection from queue and topic managers (freeing up resources)
+        and resets state.
+        """
+        self.connected = False
+        self.queue_manager.disconnect(self.connection)
+        self.topic_manager.disconnect(self.connection)
+
+
+class AsyncStompEngine(object):
+    """
+    The engine provides the core business logic that we use to respond to STOMP protocol
+    messages.
+
+    This class is transport-agnostic; it exposes methods that expect STOMP frames and
+    uses the attached connection to send frames to connected clients.
+    """
+
+    def __init__(
+        self,
+        connection: AsyncStompConnection,
+        authenticator: AsyncAuthenticator,
+        queue_manager: AsyncQueueManager,
+        topic_manager: AsyncTopicManager,
+        protocol=AsyncSTOMP10
+    ):
+        self.log = logging.getLogger('%s.%s' % (
+            self.__class__.__module__, self.__class__.__name__))
+        self.connection = connection
+        self.authenticator = authenticator
+        self.queue_manager = queue_manager
+        self.topic_manager = topic_manager
+        self.connected = False
+        self.transactions = defaultdict(list)
+
+        self.protocol = protocol(self)
+
+    async def process_frame(self, frame):
+        await self.protocol.process_frame(frame)
+
+    async def process_frame_from_connection(self):
+        frame = await self.connection.receive_frame()
+        await self.protocol.process_frame(frame)
 
     def unbind(self):
         """

@@ -8,7 +8,9 @@ import logging
 import threading
 import uuid
 from copy import deepcopy
-from coilmq.subscription import SubscriptionManager
+
+from coilmq.server import AsyncStompConnection
+from coilmq.subscription import SubscriptionManager, AsyncSubscriptionManager, AsyncSubscription
 from coilmq.util.concurrency import synchronized
 
 __authors__ = ['"Hans Lellelid" <hans@xmpl.org>']
@@ -24,6 +26,8 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License."""
+
+from coilmq.util.frames import Frame
 
 lock = threading.RLock()
 
@@ -135,3 +139,99 @@ class TopicManager(object):
 
         for s in bad_subscribers:
             self.unsubscribe(s.connection, dest, id=s.id)
+
+
+class AsyncTopicManager(object):
+    """
+    Class that manages distribution of messages to topic subscribers.
+
+    This class uses C{threading.RLock} to guard the public methods.  This is probably
+    a bit excessive, given 1) the actomic nature of basic C{dict} read/write operations
+    and  2) the fact that most of the internal data structures are keying off of the
+    STOMP connection, which is going to be thread-isolated.  That said, this seems like
+    the technically correct approach and should increase the chance of this code being
+    portable to non-GIL systems.
+    """
+
+    def __init__(self, subscriptions_manager: AsyncSubscriptionManager):
+        self.log = logging.getLogger(
+            '%s.%s' % (__name__, self.__class__.__name__))
+
+        # Lock var is required for L{synchornized} decorator.
+        self._lock = threading.RLock()
+
+        self.subscriptions_manager = subscriptions_manager
+
+    @synchronized(lock)
+    def close(self):
+        """
+        Closes all resources associated with this topic manager.
+
+        (Currently this is simply here for API conformity w/ L{coilmq.queue.QueueManager}.)
+        """
+        self.log.info("Shutting down topic manager.")  # pragma: no cover
+
+    @synchronized(lock)
+    def subscribe(
+        self,
+        connection: AsyncStompConnection,
+        destination: str,
+        id: str | int | None = None,
+    ) -> AsyncSubscription:
+        """
+        Subscribes a connection to the specified topic destination.
+        """
+        self.log.debug("Subscribing %s to %s" % (connection, destination))
+        return self.subscriptions_manager.subscribe(connection, destination, id=id)
+
+    @synchronized(lock)
+    def unsubscribe(
+        self,
+        connection: AsyncStompConnection,
+        destination: str,
+        id: str | int | None = None,
+    ) -> AsyncSubscription | None:
+        """
+        Unsubscribes a connection from the specified topic destination.
+        """
+        self.log.debug("Unsubscribing %s from %s" % (connection, destination))
+        return self.subscriptions_manager.unsubscribe(connection, destination, id=id)
+
+    @synchronized(lock)
+    def disconnect(self, connection: AsyncStompConnection):
+        """
+        Removes a subscriber connection.
+        """
+        self.log.debug("Disconnecting %s" % connection)
+        self.subscriptions_manager.disconnect(connection)
+
+    @synchronized(lock)
+    async def send(self, message: Frame):
+        """
+        Sends a message to all subscribers of destination.
+        """
+        dest = message.headers.get('destination')
+        if not dest:
+            raise ValueError(
+                "Cannot send frame with no destination: %s" % message)
+
+        message.cmd = 'message'
+
+        message.headers.setdefault('message-id', str(uuid.uuid4()))
+
+        bad_subscribers = set()
+        for subscriber in self.subscriptions_manager.subscribers(dest):
+            frame = deepcopy(message)
+            frame.headers["subscription"] = subscriber.id
+            try:
+                await subscriber.connection.send_frame(frame)
+            except Exception as e:
+                self.log.exception(
+                    "Error delivering message to subscriber %s; client will be disconnected." % subscriber)
+                # We queue for deletion so we are not modifying the topics dict
+                # while iterating over it.
+                bad_subscribers.add(subscriber)
+
+        for s in bad_subscribers:
+            self.unsubscribe(s.connection, dest, id=s.id)
+

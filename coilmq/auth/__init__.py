@@ -32,3 +32,20 @@ class Authenticator(object):
         @return: Whether user is authenticated.
         @rtype: C{bool} 
         """
+
+
+class AsyncAuthenticator(object):
+    """ Abstract base class for authenticators. """
+    __metaclass__ = abc.ABCMeta
+
+    @abc.abstractmethod
+    async def authenticate(self, login, passcode):
+        """
+        Authenticate the login and passcode.
+        """
+
+    @abc.abstractmethod
+    async def authenticate_from_token(self, token: str):
+        """
+        Authenticate the login and passcode.
+        """

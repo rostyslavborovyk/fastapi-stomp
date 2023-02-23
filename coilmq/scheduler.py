@@ -33,15 +33,6 @@ class SubscriberPriorityScheduler(object):
     def choice(self, subscribers, message):
         """
         Chooses which subscriber (from list) should recieve specified message.
-
-        @param subscribers: Collection of subscribed connections eligible to receive message. 
-        @type subscribers: C{list} of L{coilmq.subscription.Subscription}
-
-        @param message: The message to be delivered. 
-        @type message: L{stompclient.frame.Frame}
-
-        @return: A selected subscriber from the list or None if no subscriber could be chosen (e.g. list is empty).
-        @rtype: L{coilmq.subscription.Subscription}
         """
 
 
@@ -53,16 +44,6 @@ class QueuePriorityScheduler(object):
     def choice(self, queues, connection):
         """
         Choose which queue to select for messages to specified connection.
-
-        @param queues: A C{dict} mapping queue name to queues (sets of frames) to which 
-                        specified connection is subscribed.
-        @type queues:  C{dict} of C{str} to C{set} of L{stompclient.frame.Frame}
-
-        @param connection: The connection that is going to be delivered the frame(s).
-        @type connection: L{coilmq.server.StompConnection}
-
-        @return: A selected queue destination (name) or None if queues C{dict} is empty.
-        @rtype: C{str}
         """
         raise NotImplementedError
 
@@ -73,15 +54,6 @@ class RandomSubscriberScheduler(SubscriberPriorityScheduler):
     def choice(self, subscribers, message):
         """
         Chooses a random connection from subscribers to deliver specified message.
-
-        @param subscribers: Collection of subscribed connections to destination. 
-        @type subscribers: C{list} of L{coilmq.subscription.Subscription}
-
-        @param message: The message to be delivered. 
-        @type message: L{stompclient.frame.Frame}
-
-        @return: A random subscriber from the list or None if list is empty.
-        @rtype: L{coilmq.subscription.Subscription}
         """
         if not subscribers:
             return None
@@ -97,15 +69,6 @@ class FavorReliableSubscriberScheduler(SubscriberPriorityScheduler):
         """
         Choose a random connection, favoring those that are reliable from
         subscriber pool to deliver specified message.
-
-        @param subscribers: Collection of subscribed connections to destination. 
-        @type subscribers: C{list} of L{coilmq.subscription.Subscription}
-
-        @param message: The message to be delivered. 
-        @type message: L{stompclient.frame.Frame}
-
-        @return: A random subscriber from the list or None if list is empty.
-        @rtype: L{coilmq.subscription.Subscription}
         """
         if not subscribers:
             return None
@@ -125,16 +88,6 @@ class RandomQueueScheduler(QueuePriorityScheduler):
     def choice(self, queues, connection):
         """
         Chooses a random queue for messages to specified connection.
-
-        @param queues: A C{dict} mapping queue name to queues (sets of frames) to which 
-                        specified connection is subscribed.
-        @type queues:  C{dict} of C{str} to C{set} of L{stompclient.frame.Frame}
-
-        @param connection: The connection that is going to be delivered the frame(s).
-        @type connection: L{coilmq.server.StompConnection}
-
-        @return: A random queue destination or None if list is empty.
-        @rtype: C{str}
         """
         if not queues:
             return None
