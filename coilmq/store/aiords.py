@@ -8,7 +8,7 @@ try:
 except ImportError:
     import pickle
 
-from coilmq.store import QueueStore
+from coilmq.store import AsyncQueueStore
 from coilmq.util.concurrency import synchronized
 from coilmq.config import config
 
@@ -21,7 +21,7 @@ def make_redis_store(cfg=None):
         redis_conn=aioredis.Redis(**dict((cfg or config).items('redis'))))
 
 
-class AsyncRedisQueueStore(QueueStore):
+class AsyncRedisQueueStore(AsyncQueueStore):
     """Simple Queue with asynchronous Redis Backend"""
     def __init__(self, redis_conn=None):
         """The default connection parameters are: host='localhost', port=6379, db=0"""
@@ -44,12 +44,13 @@ class AsyncRedisQueueStore(QueueStore):
         await self.enqueue(destination, frame)
 
     @synchronized(lock)
-    async def size(self, destination):
+    async def size(self, destination) -> int:
         return await self.__db.llen(destination)
 
     @synchronized(lock)
-    async def has_frames(self, destination):
-        return await self.size(destination) > 0
+    async def has_frames(self, destination: str) -> bool:
+        size = await self.size(destination)
+        return size > 0
 
     @synchronized(lock)
     async def destinations(self):

@@ -4,6 +4,7 @@ Storage containers for durable queues and (planned) durable topics.
 import abc
 import logging
 import threading
+from typing import AsyncIterator, Awaitable
 
 from coilmq.util.concurrency import synchronized
 
@@ -20,6 +21,8 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License."""
+
+from coilmq.util.frames import Frame
 
 lock = threading.RLock()
 
@@ -187,3 +190,114 @@ class DurableTopicStore(TopicStore):
     """
     Abstract base class for durable topic storage.
     """
+
+
+class AsyncQueueStore:
+    """
+    Abstract base class for asynchronous queue storage.
+
+    Extensions/implementations of this class must be thread-safe.
+    """
+    __metaclass__ = abc.ABCMeta
+
+    def __init__(self):
+        """
+        A base constructor that sets up logging.
+
+        If you extend this class, you should either call this method or at minimum make sure these values
+        get set.
+        """
+        self.log = logging.getLogger('%s.%s' % (
+            self.__module__, self.__class__.__name__))
+
+    @abc.abstractmethod
+    @synchronized(lock)
+    async def enqueue(self, destination: str, frame: Frame):
+        """
+        Store message (frame) for specified destinationination.
+        """
+
+    @abc.abstractmethod
+    @synchronized(lock)
+    async def dequeue(self, destination: str) -> Frame | None:
+        """
+        Removes and returns an item from the queue (or C{None} if no items in queue).
+        """
+
+    @synchronized(lock)
+    async def requeue(self, destination: str, frame: Frame):
+        """
+        Requeue a message (frame) for storing at specified destinationination.
+        """
+        await self.enqueue(destination, frame)
+
+    @synchronized(lock)
+    async def size(self, destination: str) -> int:
+        """
+        Size of the queue for specified destination.
+        """
+        raise NotImplementedError()
+
+    @synchronized(lock)
+    async def has_frames(self, destination: str) -> bool:
+        """
+        Whether specified destination has any frames.
+
+        Default implementation uses L{QueueStore.size} to determine if there
+        are any frames in queue.  Subclasses may choose to optimize this.
+        """
+        return await self.size(destination) > 0
+
+    @synchronized(lock)
+    async def destinations(self) -> set[str]:
+        """
+        Provides a set of destinations (queue "addresses") available.
+        """
+        raise NotImplementedError
+
+    @synchronized(lock)
+    async def close(self):
+        """
+        May be implemented to perform any necessary cleanup operations when store is closed.
+        """
+        pass
+
+    # This is intentionally not synchronized, since it does not directly
+    # expose any shared data.
+    def frames(self, destination: str) -> AsyncIterator[Frame]:
+        """
+        Returns an async iterator for frames in specified queue.
+
+        The iterator simply wraps calls to L{dequeue} method, so the order of the
+        frames from the iterator will be the reverse of the order in which the
+        frames were enqueued.
+
+        @param destination: The queue destination (e.g. /queue/foo)
+        @type destination: C{str}
+        """
+        return AsyncQueueFrameIterator(self, destination)
+
+
+class AsyncQueueFrameIterator(AsyncIterator[Frame]):
+    """
+    Provides an C{iterable} over the frames for a specified destination in a queue.
+
+    @ivar destination: The destination for this iterator.
+    @type destination: C{str}
+    """
+
+    def __init__(self, store: AsyncQueueStore, destination: str):
+        self.store = store
+        self.destination = destination
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> Awaitable[Frame]:
+        frame = self.store.dequeue(self.destination)
+        if not frame:
+            raise StopAsyncIteration()
+        return frame
+
+    async def len(self) -> int:
+        return await self.store.size(self.destination)

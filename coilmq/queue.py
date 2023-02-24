@@ -9,10 +9,14 @@ import threading
 import uuid
 from collections import defaultdict
 
-from coilmq.scheduler import FavorReliableSubscriberScheduler, RandomQueueScheduler, SubscriberPriorityScheduler, \
-    QueuePriorityScheduler
+from coilmq.scheduler import (
+    FavorReliableSubscriberScheduler,
+    RandomQueueScheduler,
+    SubscriberPriorityScheduler,
+    QueuePriorityScheduler,
+)
 from coilmq.server import AsyncStompConnection
-from coilmq.store import QueueStore
+from coilmq.store import AsyncQueueStore
 from coilmq.subscription import SubscriptionManager, Subscription, AsyncSubscriptionManager, AsyncSubscription
 from coilmq.util.concurrency import synchronized
 
@@ -386,7 +390,7 @@ class AsyncQueueManager(object):
 
     def __init__(
         self,
-        store: QueueStore,
+        store: AsyncQueueStore,
         subscriber_scheduler: SubscriberPriorityScheduler | None = None,
         queue_scheduler: QueuePriorityScheduler | None = None,
     ):
@@ -438,7 +442,7 @@ class AsyncQueueManager(object):
         return self._subscriptions.subscriber_count(destination=destination)
 
     @synchronized(lock)
-    def subscribe(
+    async def subscribe(
         self,
         connection: AsyncStompConnection,
         destination: str,
@@ -449,10 +453,10 @@ class AsyncQueueManager(object):
         """
         self.log.debug("Subscribing %s to %s" % (connection, destination))
         subscription = self._subscriptions.subscribe(connection, destination, id=id)
-        self._send_backlog(subscription, destination)
+        await self._send_backlog(subscription, destination)
 
     @synchronized(lock)
-    def unsubscribe(
+    async def unsubscribe(
         self,
         connection: AsyncStompConnection,
         destination: str,
@@ -465,14 +469,14 @@ class AsyncQueueManager(object):
         self._subscriptions.unsubscribe(connection, destination, id=id)
 
     @synchronized(lock)
-    def disconnect(self, connection: AsyncStompConnection):
+    async def disconnect(self, connection: AsyncStompConnection):
         """
         Removes a subscriber connection, ensuring that any pending commands get requeued.
         """
         self.log.debug("Disconnecting %s" % connection)
         for subscription, pending_frame in list(self._pending.items()):
             if subscription.connection == connection:
-                self.store.requeue(pending_frame.headers.get(
+                await self.store.requeue(pending_frame.headers.get(
                     'destination'), pending_frame)
                 del self._pending[subscription]
         self._subscriptions.disconnect(connection)
@@ -503,7 +507,7 @@ class AsyncQueueManager(object):
         if not subscribers:
             self.log.debug(
                 "No eligible subscribers; adding message %s to queue %s" % (message, dest))
-            self.store.enqueue(dest, message)
+            await self.store.enqueue(dest, message)
         else:
             selected = self.subscriber_scheduler.choice(subscribers, message)
             self.log.debug("Delivering message %s to subscriber %s" %
@@ -537,7 +541,7 @@ class AsyncQueueManager(object):
             if pending_frame.headers.get('message-id') != message_id:
                 self.log.warning(
                     "Got a ACK for unexpected message-id: %s", message_id)
-                self.store.requeue(pending_frame.headers.get('destination'), pending_frame)
+                await self.store.requeue(pending_frame.headers.get('destination'), pending_frame)
                 # (The pending frame will be removed further down)
 
             if transaction is not None:
@@ -568,7 +572,7 @@ class AsyncQueueManager(object):
                     await self.send(frame)
 
     @synchronized(lock)
-    def clear_transaction_frames(self, connection: AsyncStompConnection, transaction: str):
+    async def clear_transaction_frames(self, connection: AsyncStompConnection, transaction: str):
         """
         Clears out the queued ACK frames for specified transaction.
 
@@ -613,23 +617,23 @@ class AsyncQueueManager(object):
                        (subscription, destination))
         if subscription.connection.reliable_subscriber:
             # only send one message (waiting for ack)
-            frame = self.store.dequeue(destination)
+            frame = await self.store.dequeue(destination)
             if frame:
                 try:
                     await self._send_frame(subscription, frame)
                 except Exception as x:
                     self.log.error(
                         "Error sending message %s (requeueing): %s" % (frame, x))
-                    self.store.requeue(destination, frame)
+                    await self.store.requeue(destination, frame)
                     raise
         else:
-            for frame in self.store.frames(destination):
+            async for frame in self.store.frames(destination):
                 try:
                     await self._send_frame(subscription, frame)
                 except Exception as x:
                     self.log.error(
                         "Error sending message %s (requeueing): %s" % (frame, x))
-                    self.store.requeue(destination, frame)
+                    await self.store.requeue(destination, frame)
                     raise
 
     async def _send_frame(self, subscription: AsyncSubscription, frame: Frame):
