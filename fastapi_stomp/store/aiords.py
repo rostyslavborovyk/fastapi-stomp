@@ -15,7 +15,6 @@ class AsyncRedisQueueStore(AsyncQueueStore):
     def __init__(self, redis_conn=None):
         """The default connection parameters are: host='localhost', port=6379, db=0"""
         self.__db: aioredis.Redis = redis_conn or aioredis.Redis()
-        # self.key = '{0}:{1}'.format(namespace, name)
         super(AsyncRedisQueueStore, self).__init__()
 
     async def enqueue(self, destination, frame):

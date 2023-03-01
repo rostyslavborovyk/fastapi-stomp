@@ -1,23 +1,24 @@
 import itertools
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Any, Iterator
+from typing import Iterator
 
 from fastapi_stomp.connection import AsyncStompConnection
 
-DEFAULT_SUBSCRIPTION_ID = 0
+DEFAULT_SUBSCRIPTION_ID = "0"
 
 
 @dataclass(frozen=True)
 class AsyncSubscription:
     connection: AsyncStompConnection
-    id: Any
+    # todo consider changing id to part of uuid or some other format
+    id: str
 
     @classmethod
     def factory(
         cls,
         connection: AsyncStompConnection,
-        id: int | None = None,
+        id: str,
     ) -> 'AsyncSubscription':
         if id is None:
             id = DEFAULT_SUBSCRIPTION_ID
@@ -32,7 +33,7 @@ class AsyncSubscriptionManager:
         self,
         connection: AsyncStompConnection,
         destination: str,
-        id: int | None = None,
+        id: str,
     ) -> AsyncSubscription:
         """
         Subscribes a connection to the specified destination.
@@ -47,14 +48,14 @@ class AsyncSubscriptionManager:
         self,
         connection: AsyncStompConnection,
         destination: str,
-        id: int | None = None,
+        id: str,
     ) -> AsyncSubscription | None:
         """
         Unsubscribes a connection from a destination.
         """
         subscriptions = self._subscriptions.get(destination, None)
         if subscriptions is None:
-            return
+            return None
         if id is None:
             id = DEFAULT_SUBSCRIPTION_ID
         subscription = AsyncSubscription(connection=connection, id=id)
@@ -93,7 +94,7 @@ class AsyncSubscriptionManager:
         else:
             return sum(map(len, self._subscriptions.values()))
 
-    def subscribers(self, destination: str | None = None) -> set[AsyncSubscription]:
+    def subscribers(self, destination: str) -> set[AsyncSubscription]:
         """
         Returns subscribers to a single destination.
         """

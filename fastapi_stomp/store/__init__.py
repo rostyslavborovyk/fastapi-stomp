@@ -3,7 +3,7 @@ Storage containers for durable queues and (planned) durable topics.
 """
 import abc
 import logging
-from typing import AsyncIterator, Awaitable
+import typing as t
 
 from fastapi_stomp.util.frames import Frame
 
@@ -73,7 +73,7 @@ class AsyncQueueStore(metaclass=abc.ABCMeta):
         May be implemented to perform any necessary cleanup operations when store is closed.
         """
 
-    def frames(self, destination: str) -> AsyncIterator[Frame]:
+    def frames(self, destination: str) -> t.AsyncIterator[Frame]:
         """
         Returns an async iterator for frames in specified queue.
 
@@ -84,7 +84,7 @@ class AsyncQueueStore(metaclass=abc.ABCMeta):
         return AsyncQueueFrameIterator(self, destination)
 
 
-class AsyncQueueFrameIterator(AsyncIterator[Frame]):
+class AsyncQueueFrameIterator(t.AsyncIterator[Frame]):
     """
     Provides an AsyncIterable over the frames for a specified destination in a queue.
     """
@@ -96,8 +96,8 @@ class AsyncQueueFrameIterator(AsyncIterator[Frame]):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> Awaitable[Frame]:
-        frame = self.store.dequeue(self.destination)
+    async def __anext__(self) -> Frame:
+        frame = await self.store.dequeue(self.destination)
         if not frame:
             raise StopAsyncIteration()
         return frame

@@ -77,7 +77,7 @@ class AsyncQueueManager:
         self,
         connection: AsyncStompConnection,
         destination: str,
-        id: int | str | None = None,
+        id: str,
     ):
         """
         Subscribes a connection to the specified destination (topic or queue).
@@ -89,7 +89,7 @@ class AsyncQueueManager:
         self,
         connection: AsyncStompConnection,
         destination: str,
-        id: int | str | None = None,
+        id: str,
     ):
         """
         Unsubscribes a connection from a destination (topic or queue).

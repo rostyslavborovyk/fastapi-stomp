@@ -54,12 +54,17 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
         cmd_method = frame.cmd.lower()
 
         if cmd_method not in VALID_COMMANDS:
-            raise ProtocolError("Invalid STOMP command: {}".format(frame.cmd))
+            raise ProtocolError(f"Invalid STOMP command: {frame.cmd}")
 
         method = getattr(self, cmd_method, None) or getattr(self, f"_{cmd_method}", None)
 
         if not self._engine.connected and method not in (self._connect, self._stomp):
-            raise ProtocolError("Not connected.")
+            raise ProtocolError("Not connected, send CONNECT frame first")
+
+        if not method:
+            raise ProtocolError(
+                f"Invalid STOMP command: {frame.cmd}, server does not support specified command"
+            )
 
         try:
             await method(frame)
@@ -120,7 +125,7 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
         if not dest:
             raise ProtocolError('Missing destination for SUBSCRIBE command.')
 
-        id = frame.headers.get('id')
+        id = frame.headers["id"]
         if dest.startswith('/queue/'):
             await self._engine.queue_manager.subscribe(self._engine.connection, dest, id=id)
         else:
@@ -134,7 +139,7 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
         if not dest:
             raise ProtocolError('Missing destination for UNSUBSCRIBE command.')
 
-        id = frame.headers.get('id')
+        id = frame.headers["id"]
         if dest.startswith('/queue/'):
             await self._engine.queue_manager.unsubscribe(self._engine.connection, dest, id=id)
         else:

@@ -33,7 +33,7 @@ class AsyncTopicManager:
         self,
         connection: AsyncStompConnection,
         destination: str,
-        id: str | int | None = None,
+        id: str,
     ) -> AsyncSubscription:
         """
         Subscribes a connection to the specified topic destination.
@@ -45,7 +45,7 @@ class AsyncTopicManager:
         self,
         connection: AsyncStompConnection,
         destination: str,
-        id: str | int | None = None,
+        id: str,
     ) -> AsyncSubscription | None:
         """
         Unsubscribes a connection from the specified topic destination.
@@ -53,12 +53,12 @@ class AsyncTopicManager:
         self.log.debug("Unsubscribing %s from %s" % (connection, destination))
         return await self.subscriptions_manager.unsubscribe(connection, destination, id=id)
 
-    def disconnect(self, connection: AsyncStompConnection):
+    async def disconnect(self, connection: AsyncStompConnection):
         """
         Removes a subscriber connection.
         """
         self.log.debug("Disconnecting %s" % connection)
-        self.subscriptions_manager.disconnect(connection)
+        await self.subscriptions_manager.disconnect(connection)
 
     async def send(self, message: Frame):
         """
