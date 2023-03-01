@@ -56,7 +56,7 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
         if cmd_method not in VALID_COMMANDS:
             raise ProtocolError("Invalid STOMP command: {}".format(frame.cmd))
 
-        method = getattr(self, cmd_method, None)
+        method = getattr(self, cmd_method, None) or getattr(self, f"_{cmd_method}", None)
 
         if not self._engine.connected and method not in (self._connect, self._stomp):
             raise ProtocolError("Not connected.")
