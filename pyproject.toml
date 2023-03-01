@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "fastapi-stomp"
+version = "0.1.0"
+description = "Extendable implementation of stomp for fastapi"
+authors = ["rostyslav <rostmoguchiy@gmail.com>"]
+readme = "README.md"
+packages = [{include = "fastapi_stomp"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.92.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
