@@ -1,7 +1,7 @@
 import itertools
 from dataclasses import dataclass
 from collections import defaultdict
-from typing import Iterator
+import typing as t
 
 from fastapi_stomp.connection import AsyncStompConnection
 
@@ -101,7 +101,7 @@ class AsyncSubscriptionManager:
         """
         return self._subscriptions.get(destination, set())
 
-    def all_subscribers(self) -> Iterator[AsyncSubscription]:
+    def all_destinations_subscribers(self) -> t.Iterator[tuple[str, set[AsyncSubscription]]]:
         """
         Yields all subscribers.
         """
