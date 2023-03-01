@@ -27,6 +27,7 @@ class AsyncSubscription:
 
 class AsyncSubscriptionManager:
     def __init__(self):
+        # todo store subscriptions in redis
         self._subscriptions: dict[str, set[AsyncSubscription]] = defaultdict(set)
 
     async def subscribe(
