@@ -11,36 +11,36 @@ TAsyncStompEngine = t.TypeVar('TAsyncStompEngine', bound=AsyncStompEngine)
 
 
 class AsyncSTOMP(abc.ABC, t.Generic[TAsyncStompEngine]):
-    engine: TAsyncStompEngine
+    _engine: TAsyncStompEngine
 
     def __init__(self, engine: TAsyncStompEngine):
-        self.engine: TAsyncStompEngine = engine
+        self._engine: TAsyncStompEngine = engine
 
-    async def stomp(self, frame: Frame):
-        await self.connect(frame)
+    async def _stomp(self, frame: Frame):
+        await self._connect(frame)
 
     @abc.abstractmethod
     async def process_frame(self, frame: Frame):
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def connect(self, frame: Frame):
+    async def _connect(self, frame: Frame):
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def send(self, frame: Frame):
+    async def _send(self, frame: Frame):
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def subscribe(self, frame: Frame):
+    async def _subscribe(self, frame: Frame):
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def unsubscribe(self, frame: Frame):
+    async def _unsubscribe(self, frame: Frame):
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def disconnect(self, frame: Frame):
+    async def _disconnect(self, frame: Frame):
         raise NotImplementedError
 
 
@@ -58,25 +58,25 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
 
         method = getattr(self, cmd_method, None)
 
-        if not self.engine.connected and method not in (self.connect, self.stomp):
+        if not self._engine.connected and method not in (self._connect, self._stomp):
             raise ProtocolError("Not connected.")
 
         try:
             await method(frame)
         except Exception as e:
-            self.engine.log.error("Error processing STOMP frame: %s" % e)
-            self.engine.log.exception(e)
+            self._engine.log.error("Error processing STOMP frame: %s" % e)
+            self._engine.log.exception(e)
             try:
-                await self.engine.connection.send_frame(ErrorFrame(str(e), str(e)))
+                await self._engine.connection.send_frame(ErrorFrame(str(e), str(e)))
             except Exception as e:  # pragma: no cover
-                self.engine.log.error("Could not send error frame: %s" % e)
-                self.engine.log.exception(e)
+                self._engine.log.error("Could not send error frame: %s" % e)
+                self._engine.log.exception(e)
         else:
-            if frame.headers.get('receipt') and method != self.connect:
-                await self.engine.connection.send_frame(ReceiptFrame(
+            if frame.headers.get('receipt') and method != self._connect:
+                await self._engine.connection.send_frame(ReceiptFrame(
                     receipt=frame.headers.get('receipt')))
 
-    async def send(self, frame):
+    async def _send(self, frame):
         """
         Handle the SEND command: Delivers a message to a queue or topic (default).
         """
@@ -85,11 +85,11 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
             raise ProtocolError('Missing destination for SEND command.')
 
         if dest.startswith('/queue/'):
-            await self.engine.queue_manager.send(frame)
+            await self._engine.queue_manager.send(frame)
         else:
-            await self.engine.topic_manager.send(frame)
+            await self._engine.topic_manager.send(frame)
 
-    async def connect(self, frame, response=None):
+    async def _connect(self, frame, response=None):
         await self._check_protocol(frame)
 
         # todo add heartbeat
@@ -97,22 +97,22 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
         # if heart_beat:
         #     await self.enable_heartbeat(*map(int, heart_beat.split(',')), response=connected_frame)
 
-        self.engine.log.debug("CONNECT")
+        self._engine.log.debug("CONNECT")
 
         if token := frame.headers.get('token'):
-            if not await self.engine.authenticator.authenticate_from_token(token):
+            if not await self._engine.authenticator.authenticate_from_token(token):
                 raise AuthError("Authentication from token failed")
         else:
             raise AuthError("Token is missing in the headers")
 
-        self.engine.connected = True
+        self._engine.connected = True
 
         response = response or Frame(frames.CONNECTED)
         response.headers['session'] = uuid.uuid4()
 
-        await self.engine.connection.send_frame(response)
+        await self._engine.connection.send_frame(response)
 
-    async def subscribe(self, frame):
+    async def _subscribe(self, frame):
         if "id" not in frame.headers:
             raise ProtocolError("No 'id' specified for SUBSCRIBE command.")
 
@@ -122,11 +122,11 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
 
         id = frame.headers.get('id')
         if dest.startswith('/queue/'):
-            await self.engine.queue_manager.subscribe(self.engine.connection, dest, id=id)
+            await self._engine.queue_manager.subscribe(self._engine.connection, dest, id=id)
         else:
-            await self.engine.topic_manager.subscribe(self.engine.connection, dest, id=id)
+            await self._engine.topic_manager.subscribe(self._engine.connection, dest, id=id)
 
-    async def unsubscribe(self, frame):
+    async def _unsubscribe(self, frame):
         if "id" not in frame.headers:
             raise ProtocolError("No 'id' specified for UNSUBSCRIBE command.")
 
@@ -136,30 +136,30 @@ class AsyncSTOMP12(AsyncSTOMP, t.Generic[TAsyncStompEngine]):
 
         id = frame.headers.get('id')
         if dest.startswith('/queue/'):
-            await self.engine.queue_manager.unsubscribe(self.engine.connection, dest, id=id)
+            await self._engine.queue_manager.unsubscribe(self._engine.connection, dest, id=id)
         else:
-            await self.engine.topic_manager.unsubscribe(self.engine.connection, dest, id=id)
+            await self._engine.topic_manager.unsubscribe(self._engine.connection, dest, id=id)
 
-    async def disconnect(self, frame):
+    async def _disconnect(self, frame):
         """
         Handles the DISCONNECT command: Unbinds the connection.
 
         Clients are supposed to send this command, but in practice it should not be
         relied upon.
         """
-        self.engine.log.debug("Disconnect")
-        self.engine.unbind()
+        self._engine.log.debug("Disconnect")
+        self._engine.unbind()
 
     async def _check_protocol(self, frame):
         client_versions = frame.headers.get('accept-version')
         if not client_versions:
-            await self.engine.connection.send_frame(Frame(
+            await self._engine.connection.send_frame(Frame(
                 frames.ERROR,
                 headers={'version': self.SUPPORTED_VERSION, 'content-type': frames.TEXT_PLAIN},
                 body=f"No protocol version specified, specify 'accept-version' header"
             ))
         if self.SUPPORTED_VERSION not in set(client_versions.split(',')):
-            await self.engine.connection.send_frame(Frame(
+            await self._engine.connection.send_frame(Frame(
                     frames.ERROR,
                     headers={'version': self.SUPPORTED_VERSION, 'content-type': frames.TEXT_PLAIN},
                     body=f'Supported protocol versions are {self.SUPPORTED_VERSION}'

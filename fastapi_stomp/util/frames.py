@@ -33,25 +33,9 @@ VALID_COMMANDS = [
 TEXT_PLAIN = 'text/plain'
 
 
-
-
-
 def parse_from_text(message: str):
     """
     Called to unpack a STOMP message into a dictionary.
-    returned = {
-        # STOMP Command:
-        'cmd' : '...',
-        # Headers e.g.
-        'headers' : {
-            'destination' : 'xyz',
-            'message-id' : 'some event',
-            :
-            etc,
-        }
-        # Body:
-        'body' : '...1234...\x00',
-    }
     """
     headers = {}
     body = []
@@ -62,26 +46,26 @@ def parse_from_text(message: str):
     cmd = breakdown[0]
     breakdown = breakdown[1:]
 
-    def headD(field):
+    def head_data(f):
         # find the first ':' everything to the left of this is a
         # header, everything to the right is data:
-        index = field.find(':')
+        index = f.find(':')
         if index:
-            header = field[:index].strip()
-            data = field[index+1:].strip()
+            header = f[:index].strip()
+            data = f[index+1:].strip()
             headers[header.strip()] = data.strip()
 
-    def bodyD(field):
-        field = field.strip()
-        if field:
-            body.append(field)
+    def body_data(f):
+        f = f.strip()
+        if f:
+            body.append(f)
 
     # Recover the header fields and body data
-    handler = headD
+    handler = head_data
     for field in breakdown:
         if field.strip() == '':
             # End of headers, if body data next.
-            handler = bodyD
+            handler = body_data
             continue
 
         handler(field)
@@ -188,10 +172,6 @@ class ErrorFrame(Frame):
     """ An ERROR server frame. """
 
     def __init__(self, message, body=None, extra_headers=None):
-        """
-        @param body: The message body bytes.
-        @type body: C{str}
-        """
         super(ErrorFrame, self).__init__(cmd='error',
                                          headers=extra_headers or {}, body=body)
         self.headers['message'] = message
@@ -205,11 +185,7 @@ class ErrorFrame(Frame):
 class ReceiptFrame(Frame):
     """ A RECEIPT server frame. """
 
-    def __init__(self, receipt, extra_headers=None):
-        """
-        @param receipt: The receipt message ID.
-        @type receipt: C{str}
-        """
+    def __init__(self, receipt: str, extra_headers=None):
         super(ReceiptFrame, self).__init__(
             'RECEIPT', headers=extra_headers or {})
         self.headers['receipt-id'] = receipt
