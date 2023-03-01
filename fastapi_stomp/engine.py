@@ -15,6 +15,11 @@ class AsyncStompEngine:
     uses the attached connection to send frames to connected clients.
     """
 
+    connection: AsyncStompConnection
+    authenticator: AsyncAuthenticator
+    queue_manager: AsyncQueueManager
+    topic_manager: AsyncTopicManager
+
     def __init__(
         self,
         connection: AsyncStompConnection,
